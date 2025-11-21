@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"time"
 
 	logger "github.com/scinac/CLImanga/internal/log"
 )
@@ -247,22 +248,36 @@ func retrieveMangaChapterImagesIDs(chapterID *string) ([]string, string, error) 
 }
 
 func downloadFile(url, path string) error {
-	resp, err := http.Get(url)
-	if err != nil {
-		return err
-	}
-	defer resp.Body.Close()
+	const maxRetries = 5
+	var err error
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err = func() error {
+			resp, err := http.Get(url)
+			if err != nil {
+				return err
+			}
+			defer resp.Body.Close()
 
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("bad status: %s", resp.Status)
+			if resp.StatusCode != http.StatusOK {
+				return fmt.Errorf("bad status: %s", resp.Status)
+			}
+
+			outFile, err := os.Create(path)
+			if err != nil {
+				return err
+			}
+			defer outFile.Close()
+
+			_, err = io.Copy(outFile, resp.Body)
+			return err
+		}()
+		if err == nil {
+			return nil // success
+		}
+		logger.Error.Printf("Attempt %d: Failed to download %s: %v", attempt+1, url, err)
+		time.Sleep(time.Second * 4) // If failed, wait and retry
 	}
 
-	outFile, err := os.Create(path)
-	if err != nil {
-		return err
-	}
-	defer outFile.Close()
-
-	_, err = io.Copy(outFile, resp.Body)
-	return err
+	// If all attempts fail, return the last error
+	return fmt.Errorf("failed to download file from %s after %d attempts: %v", url, maxRetries, err)
 }
